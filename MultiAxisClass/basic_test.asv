@@ -1,0 +1,74 @@
+#Basic Check to make sure matlab can connect
+#Important: Cannot query faster than 1 Hz 
+import subprocess
+import time
+import sys
+class MyClass:
+    def __init__(self):
+        self.multiSubProcess = None
+        self.multiAxisConfig = None
+    def queryField(self):
+        self.multiSubProcess.stdin.write(b'FIELD?\n')
+        self.multiSubProcess.stdin.flush()
+        a=self.multiSubProcess.stdout.readline()
+        print(a)
+        return a
+    def queryIDN(self):
+        self.stdin.write(b'*IDN?\n')
+        self.stdin.flush()
+        a=self.multiSubProcess.stdout.readline()
+        print(a)
+        return a
+    def initialize(self):
+        programPathCom='C:\Program Files\American Magnetics, Inc\Multi-Axis Operation\Multi-Axis-Operation -p'
+        self.multiAxisConfig=b'C:\Users\LTSPM3\Desktop\AMI Magnet Log\LTSPM3_1_24_25.sav'
+        print("Opening Multi-Axis")
+        multiAxis=subprocess.Popen(programPathCom, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+
+
+        
+def main():
+
+    
+    myMultiAxis=MyClass(multiAxis)
+
+    time.sleep(5)
+    # query for MAO version info
+    print("Querying Multi-Axis Version")
+    multiAxis.stdin.write(b'*IDN?\n')
+    multiAxis.stdin.flush()
+    print(multiAxis.stdout.readline().strip())
+    print("Loading Configuration")
+    multiAxis.stdin.write(b'LOAD:SET '+multiAxisConfig+b'\n')
+    multiAxis.stdin.flush()
+    print("Connecting to Model 430s")
+    multiAxis.stdin.write(b'SYST:CONN\n')
+    multiAxis.stdin.flush()
+    
+    print("Waiting for CONNECT", end='')
+    
+    stateVal = 0
+    stateStr = ""
+    # checking for a connected state
+    
+    while not stateVal:
+        time.sleep(1)
+        multiAxis.stdin.write(b'STATE?\n')
+        multiAxis.stdin.flush()
+        stateStr = multiAxis.stdout.readline()
+        stateVal = int(stateStr.strip())
+        if not stateVal:
+            print('.', end='')
+        else:
+            print("STATE = " + str(stateVal))
+            time.sleep(1.1)
+    
+    multiAxis.stdin.write(b'FIELD?\n')
+    multiAxis.stdin.flush()
+    print(multiAxis.stdout.readline())
+    
+
+
+    return myMultiAxis
+
+main()
