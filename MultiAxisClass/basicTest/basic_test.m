@@ -3,7 +3,7 @@ pyenv(ExecutionMode="OutOfProcess")
 terminate(pyenv);
 pyenv
 my_module=py.importlib.import_module('basic_test')
-obj=my_module.MyClass();
+obj=my_module.vectorMagnet();
 obj.initialize()
 pause(3)
 obj.queryIDN()
