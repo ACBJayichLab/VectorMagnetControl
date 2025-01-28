@@ -15,11 +15,12 @@ For example, these lines of code start the Multi-Axis Software in LTSPM3:
 ```
 % Start Vector Magnet Control
 % See python methods by calling: methods(handles.vectorMagnet)
-% Python will run in parallel. Code must be written to accomodate.
+
 path_add = fileparts(which('vectorMagnet.py'));
 if count(py.sys.path, path_add) == 0
     insert(py.sys.path, int64(0), path_add);
 end
+
 pyenv(ExecutionMode="OutOfProcess");
 vectorMagnetModule=py.importlib.import_module('vectorMagnet');
 handles.vectorMagnet = vectorMagnetModule.vectorMagnet();
