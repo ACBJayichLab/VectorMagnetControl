@@ -273,7 +273,7 @@ class vectorMagnet:
         if (tableRow<1):
             raise Exception("Table row must be greater than 0.")
 
-        self.__sendCommand(b'CONF:TARG:VEC:TABL '+str(tableRow).encode('ascii'))
+        self.__sendCommand(b'CONF:TARG:VEC:TAB '+str(tableRow).encode('ascii'))
     
     def setTargetToPolar(self, magnitude:float, angle:float, dwellTime:float|None = None):
         """Sets target field in polar coordinates, adds it to the polar table, and begins ramping. Magnitude is in the present field units.
