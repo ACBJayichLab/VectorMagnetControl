@@ -11,13 +11,13 @@ class vectorMagnet:
     """
     def __init__(self):
         self.multiSubProcess = None
-        self.multiAxisConfig = b'C:\Users\LTSPM3\Desktop\AMI Magnet Log\LTSPM3_1_24_25.sav'
-        self.multiProgramPath = 'C:\Program Files\American Magnetics, Inc\Multi-Axis Operation\Multi-Axis-Operation'
+        self.multiAxisConfig = R'C:\Users\LTSPM3\Desktop\AMI Magnet Log\LTSPM3_1_28_25.sav'
+        self.multiProgramPath = R'C:\Program Files\American Magnetics, Inc\Multi-Axis Operation\Multi-Axis-Operation'
 
         #Errors provided for try catch logic
         #This error shouldn't be raised but it is technically possible
         self.noError=Exception('0,"No error"')
-        self.unrecongizedCommandError=Exception('-101,"Unrecognized command"')
+        self.unrecognizedCommandError=Exception('-101,"Unrecognized command"')
         self.invalidArgumentError=Exception('-102,"Invalid argument"')
         self.nonBooleanArgumentError=Exception('-103,"Non-boolean argument"')
         self.missingParameterError=Exception('-104,"Missing parameter"')
@@ -32,7 +32,7 @@ class vectorMagnet:
         self.yCoilMissingError=Exception('-158,"Field requires y-coil"')
         self.zCoilLimitError=Exception('-159,"Field exceeds z-coil limit"')
         self.zCoilMissingError=Exception('-160,"Field requires z-coil"')
-        self.unrecongizedQueryError=Exception('-201,"Unrecognized query"')
+        self.unrecognizedQueryError=Exception('-201,"Unrecognized query"')
         self.notConnectedError=Exception('-301,"Not connected"')
         self.connectionAttemptTimeout=Exception('Connection attempt exceeded time limit. Program in unknown state')
         self.switchTransitionError=Exception('-302,"Switch in transition"')
@@ -54,6 +54,7 @@ class vectorMagnet:
         self.__sendCommand(b'EXIT')
     
     def __sendCommand(self, commandString:str):
+        """Takes in ascii encoded string."""
         #Command inputs should not have \n as that is added here
         self.multiSubProcess.stdin.write(commandString+b'\n')
         self.multiSubProcess.stdin.flush()
@@ -65,20 +66,23 @@ class vectorMagnet:
             print("Error detected following command.")
             raise Exception(errorString)
 
-    def public_sendCommand(self, commandString):
-        """Delete later"""
-        self.__sendCommand(commandString)
+    def _sendUnsafeCommand(self, commandString:str):
+        """Sends command without error checking. Intended for tests."""
+        self.multiSubProcess.stdin.write(commandString+b'\n')
+        self.multiSubProcess.stdin.flush()
         
-    def formatNumericInput(self, input: int | float):
+    def __formatNumericInput(self, input: int | float):
         output=f'{input:.10f}'.rstrip('0').rstrip('.').encode('ascii')
         return output
 
     def __sendQuery(self, commandString:str) -> (str):
+        """Takes in ascii encoded string."""
         #Automatically includes ?\n at the end of the command
         self.multiSubProcess.stdin.write(commandString+b'?\n')
         self.multiSubProcess.stdin.flush()
         readBits=self.multiSubProcess.stdout.readline()
         decodedString=readBits.decode('ascii')
+        decodedString=decodedString.rstrip()
 
         time.sleep(1.001)
         errorCount = self.getErrorCount()
@@ -91,6 +95,15 @@ class vectorMagnet:
 
         return decodedString
 
+    def _sendUnsafeQuery(self, commandString:str) -> (str):
+        """Sends query without without error checking. Intended for tests."""
+        #Automatically includes ?\n at the end of the command
+        self.multiSubProcess.stdin.write(commandString+b'?\n')
+        self.multiSubProcess.stdin.flush()
+        readBits=self.multiSubProcess.stdout.readline()
+        decodedString=readBits.decode('ascii')
+        return decodedString
+
     def getError(self) -> str:
         """Returns last-in-first-out error string. See manual for decoding.
             If there is an error, it is then removed from the queue.
@@ -101,6 +114,7 @@ class vectorMagnet:
         self.multiSubProcess.stdin.flush()
         readBits=self.multiSubProcess.stdout.readline()
         errorString=readBits.decode('ascii')
+        errorString=errorString.rstrip()
         return errorString
     
     def getErrorCount(self) -> int:
@@ -173,15 +187,24 @@ class vectorMagnet:
         """
         fieldString=self.__sendQuery(b'FIELD')
         print(fieldString)
-        fieldList=[float(e) if e.isdecimal() else e for e in fieldString.split(',')]
-        return fieldList[1],fieldList[2],fieldList[3]
+
+        # Handle potential invalid inputs
+        fieldList = []
+        for e in fieldString.split(','):
+            fieldList.append(float(e))
+
+        return fieldList[0],fieldList[1],fieldList[2]
     
     def getFieldCartesian(self) -> tuple[float, float, float]:
         """Returns Bx, By, & Bz in Cartesian coordinates with currently active units"""
         fieldString=self.__sendQuery(b'FIELD:CART')
         print(fieldString)
-        fieldList=[float(e) if e.isdecimal() else e for e in fieldString.split(',')]
-        return fieldList[1],fieldList[2],fieldList[3]
+        
+        # Handle potential invalid inputs
+        fieldList = []
+        for e in fieldString.split(','):
+            fieldList.append(float(e))
+        return fieldList[0], fieldList[1], fieldList[2]
     
     def getIDN(self) -> (str):
         identifier=self.__sendQuery(b'*IDN')
@@ -218,7 +241,7 @@ class vectorMagnet:
         """
         if not(vectorNumber == 1 or vectorNumber == 2):
             raise Exception("Not a valid vector specification.")
-        self.__sendCommand(b'CONF:ALIGN'+str(vectorNumber).encode('ascii')+b' '+self.formatNumericInput(magnitude)+b','+self.formatNumericInput(azimuth)+b','+self.formatNumericInput(inclination))
+        self.__sendCommand(b'CONF:ALIGN'+str(vectorNumber).encode('ascii')+b' '+self.__formatNumericInput(magnitude)+b','+self.__formatNumericInput(azimuth)+b','+self.__formatNumericInput(inclination))
 
     def configureTargetToAlignmentVector(self, vectorNumber:int):
         """Sets the target field to the specified alignment vector and begins ramping. Vector number should be 1 or 2."""
@@ -226,23 +249,23 @@ class vectorMagnet:
             raise Exception("Not a valid vector specification.")
         self.__sendCommand(b'CONF:TARG:ALIGN'+str(vectorNumber).encode('ascii'))
     
-    def setTargetFieldSpherical(self, magnitude:float, azimuth:float, inclination:float, dwellTime:float|None):
+    def setTargetFieldSpherical(self, magnitude:float, azimuth:float, inclination:float, dwellTime:float|None = None):
         """Sets target field in spherical coordinates, adds it to the vector table, and begins ramping. Magnitude is in the present field units.
         Dwell time is in seconds. If none, a zero entry is generated.
         """
         if dwellTime is None:
-            self.__sendCommand(b'CONF:TARG:VEC '+self.formatNumericInput(magnitude)+b','+self.formatNumericInput(azimuth)+b','+self.formatNumericInput(inclination))
+            self.__sendCommand(b'CONF:TARG:VEC '+self.__formatNumericInput(magnitude)+b','+self.__formatNumericInput(azimuth)+b','+self.__formatNumericInput(inclination))
         else:
-            self.__sendCommand(b'CONF:TARG:VEC '+self.formatNumericInput(magnitude)+b','+self.formatNumericInput(azimuth)+b','+self.formatNumericInput(inclination)+b','+self.formatNumericInput(dwellTime))
+            self.__sendCommand(b'CONF:TARG:VEC '+self.__formatNumericInput(magnitude)+b','+self.__formatNumericInput(azimuth)+b','+self.__formatNumericInput(inclination)+b','+self.__formatNumericInput(dwellTime))
 
-    def setTargetFieldCartesian(self, Bx:float, By:float, Bz:float, dwellTime:float|None):
+    def setTargetFieldCartesian(self, Bx:float, By:float, Bz:float, dwellTime:float|None = None):
         """Sets target field in Cartesian coordinates, adds it to the vector table, and begins ramping. Magnitude is in the present field units.
         Dwell time is in seconds. If none, a zero entry is generated.
         """
         if dwellTime is None:
-            self.__sendCommand(b'CONF:TARG:VEC:CART '+self.formatNumericInput(Bx)+b','+self.formatNumericInput(By)+b','+self.formatNumericInput(Bz))
+            self.__sendCommand(b'CONF:TARG:VEC:CART '+self.__formatNumericInput(Bx)+b','+self.__formatNumericInput(By)+b','+self.__formatNumericInput(Bz))
         else:
-            self.__sendCommand(b'CONF:TARG:VEC:CART '+self.formatNumericInput(Bx)+b','+self.formatNumericInput(By)+b','+self.formatNumericInput(Bz)+b','+self.formatNumericInput(dwellTime))
+            self.__sendCommand(b'CONF:TARG:VEC:CART '+self.__formatNumericInput(Bx)+b','+self.__formatNumericInput(By)+b','+self.__formatNumericInput(Bz)+b','+self.__formatNumericInput(dwellTime))
         
     def setTargetToVectorTableRow(self, tableRow: int):
         """Sets the target field to the specified table row and begins ramping. Table row should be an int.
@@ -252,14 +275,14 @@ class vectorMagnet:
 
         self.__sendCommand(b'CONF:TARG:VEC:TABL '+str(tableRow).encode('ascii'))
     
-    def setTargetToPolar(self, magnitude:float, angle:float, dwellTime:float|None):
+    def setTargetToPolar(self, magnitude:float, angle:float, dwellTime:float|None = None):
         """Sets target field in polar coordinates, adds it to the polar table, and begins ramping. Magnitude is in the present field units.
         Dwell time is in seconds. If none, a zero entry is generated.
         """
         if dwellTime is None:
-            self.__sendCommand(b'CONF:TARG:POL '+self.formatNumericInput(magnitude)+b','+self.formatNumericInput(angle))
+            self.__sendCommand(b'CONF:TARG:POL '+self.__formatNumericInput(magnitude)+b','+self.__formatNumericInput(angle))
         else:
-            self.__sendCommand(b'CONF:TARG:POL '+self.formatNumericInput(magnitude)+b','+self.formatNumericInput(angle)+b','+self.formatNumericInput(dwellTime))
+            self.__sendCommand(b'CONF:TARG:POL '+self.__formatNumericInput(magnitude)+b','+self.__formatNumericInput(angle)+b','+self.__formatNumericInput(dwellTime))
     
     def setTargetToPolarTableRow(self, tableRow: int):
         """Sets the target field to the specified table row and begins ramping. Table row should be an int.
@@ -290,9 +313,9 @@ class vectorMagnet:
         returnVal=self.__sendQuery(b'PERS')
         return bool(int(returnVal.strip()))
     
-    def getAlignmentVectorSpherical(self, vectorNumber:int) -> tuple[float, float, float]:
+    def getSampleAlignmentVectorSpherical(self, vectorNumber:int) -> tuple[float, float, float]:
         """
-        Returns the alignment vector in spherical coordinates.
+        Returns the sample alignment vector in spherical coordinates.
 
         Parameters:
         vectorNumber (int): The vector number, should be either 1 or 2.
@@ -306,12 +329,15 @@ class vectorMagnet:
         if not(vectorNumber == 1 or vectorNumber == 2):
             raise Exception("Not a valid vector specification.")
         vectorString = self.__sendQuery(b'ALIGN' + str(vectorNumber).encode('ascii'))
-        vectorList = [float(e) if e.isdecimal() else e for e in vectorString.split(',')]
-        return vectorList[1], vectorList[2], vectorList[3]
+        # Handle potential invalid inputs
+        vectorList = []
+        for e in vectorString.split(','):
+            vectorList.append(float(e))
+        return vectorList[0], vectorList[1], vectorList[2]
     
-    def getAlignmentVectorCartesian(self, vectorNumber:int) -> tuple[float, float, float]:
+    def getSampleAlignmentVectorCartesian(self, vectorNumber:int) -> tuple[float, float, float]:
         """
-        Returns the alignment vector in Cartesian coordinates.
+        Returns the sample alignment vector in Cartesian coordinates.
 
         Parameters:
         vectorNumber (int): The vector number, should be either 1 or 2.
@@ -324,19 +350,22 @@ class vectorMagnet:
         """
         if not(vectorNumber == 1 or vectorNumber == 2):
             raise Exception("Not a valid vector specification.")
-        vectorString = self.__sendQuery(b'ALIGN:CART' + str(vectorNumber).encode('ascii'))
-        vectorList = [float(e) if e.isdecimal() else e for e in vectorString.split(',')]
-        return vectorList[1], vectorList[2], vectorList[3]
+        vectorString = self.__sendQuery(b'ALIGN' + str(vectorNumber).encode('ascii')+b':CART')
+        # Handle potential invalid inputs
+        vectorList = []
+        for e in vectorString.split(','):
+            vectorList.append(float(e))
+        return vectorList[0], vectorList[1], vectorList[2]
 
-    def getAlignmentPlane(self) -> tuple[float, float, float]:
+    def getSampleAlignmentPlane(self) -> tuple[float, float, float]:
         """
         Returns the coefficients for the implicit plane equation made by the two sample alignment vectors.
         
         Returns (a, b, c) for the plane equation ax + by + cz = 0.
         """
         planeString = self.__sendQuery(b'PLANE')
-        planeList = [float(e) if e.isdecimal() else e for e in planeString.split(',')]
-        return planeList[1], planeList[2], planeList[3]
+        planeList = [float(e) if e.isnumeric() else e for e in planeString.split(',')]
+        return planeList[0], planeList[1], planeList[2]
     
     def getTargetFieldSpherical(self) -> tuple[float, float, float]:
         """
@@ -346,8 +375,11 @@ class vectorMagnet:
         tuple[float, float, float]: The target field in spherical coordinates (r, phi, theta).
         """
         fieldString = self.__sendQuery(b'TARG')
-        fieldList = [float(e) if e.isdecimal() else e for e in fieldString.split(',')]
-        return fieldList[1], fieldList[2], fieldList[3]
+        # Handle potential invalid inputs
+        fieldList = []
+        for e in fieldString.split(','):
+            fieldList.append(float(e))
+        return fieldList[0], fieldList[1], fieldList[2]
     
     def getTargetFieldCartesian(self) -> tuple[float, float, float]:
         """
@@ -357,8 +389,11 @@ class vectorMagnet:
         tuple[float, float, float]: The target field in Cartesian coordinates (Bx, By, Bz).
         """
         fieldString = self.__sendQuery(b'TARG:CART')
-        fieldList = [float(e) if e.isdecimal() else e for e in fieldString.split(',')]
-        return fieldList[1], fieldList[2], fieldList[3]
+        # Handle potential invalid inputs
+        fieldList = []
+        for e in fieldString.split(','):
+            fieldList.append(float(e))
+        return fieldList[0], fieldList[1], fieldList[2]
     
     def getTimeToTarget(self) -> float:
         """

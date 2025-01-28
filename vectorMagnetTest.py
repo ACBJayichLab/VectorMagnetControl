@@ -1,9 +1,12 @@
-import vectorMagnet
-
-multiAxisControl = vectorMagnet.vectorMagnet()
+from MultiAxisClass.vectorMagnet import vectorMagnet
+import time
+multiAxisControl = vectorMagnet()
 
 multiAxisControl.initialize_program()
-# multiAxisControl.connect()
+time.sleep(1)
+multiAxisControl.connect()
+time.sleep(1)
+a=multiAxisControl.getError()
 # vectorMagnet.time.sleep(1.01)
 # errorCount=multiAxisControl.getErrorCount()
 # if(errorCount==0):
