@@ -3,7 +3,7 @@
 #Only customizable lines are the two paths in __init__
 import subprocess
 import time
-import sys
+
 class vectorMagnet:
     """Controller object for AMI vector magnet Multi-Axis program. Written in python and intended for use via Matlab.
     Care should be taken as the Model 430's are fixed to one sample per second
@@ -172,7 +172,7 @@ class vectorMagnet:
                         raise Exception(currentError)
                     elif(elapsedTime>timeoutErrorTime):
                         print("Connection was not established and program timed out. Program state unknown.")
-                        raise self.connectionAttemptTimeout()
+                        raise self.connectionAttemptTimeout
             else:
                 print("STATE = " + str(stateVal))
                 return stateVal

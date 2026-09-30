@@ -4,7 +4,7 @@ terminate(pyenv);
 pyenv
 my_module=py.importlib.import_module('basic_test')
 obj=my_module.vectorMagnet();
-obj.initialize()
+obj.initialize_program()
 pause(3)
-obj.queryIDN()
+obj.getIDN()
 %Prints the response and returns it as a bit array
