@@ -1,7 +1,9 @@
 #Important: Cannot query faster than 1 Hz
 #Parser commands for configuring the magnet parameters are not supported. This must be done via the GUI and then saved
 #Only customizable lines are the two paths in __init__
+import queue
 import subprocess
+import threading
 import time
 
 class vectorMagnet:
@@ -43,15 +45,70 @@ class vectorMagnet:
         self.noSwitchError=Exception('-307,"No switch installed"')
         self.loadConnectedError=Exception('-308,"Cannot LOAD while connected"')
 
+        # Reply handling (see _startReader / _readline). Replies are read by a
+        # background thread so a wedged Multi-Axis program raises
+        # responseTimeoutError instead of blocking the caller (MATLAB) forever.
+        self.responseTimeoutError=Exception('Timed out waiting for a reply from Multi-Axis')
+        self.notRunningError=Exception('Multi-Axis program is not running')
+        self.replyTimeout=5.0          # seconds; replies normally arrive within milliseconds
+        self._replyQueue=None
+        self._readerThread=None
+
+    STATE_NAMES = {0: 'DISCONNECTED', 1: 'RAMPING', 2: 'HOLDING', 3: 'PAUSED',
+                   4: 'ZEROING', 5: 'AT_ZERO', 6: 'QUENCH',
+                   7: 'HEATING_SWITCHES', 8: 'COOLING_SWITCHES'}
+
     def initialize_program(self):
         programPathCom=self.multiProgramPath+' -p'
         print("Opening Multi-Axis")
         print(programPathCom)
         self.multiSubProcess=subprocess.Popen(programPathCom, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        self._startReader()
 
     def exit_program(self):
         """Disconnects from all system devices and gracefully exits Multi-Axis program"""
         self.__sendCommand(b'EXIT')
+
+    # ----- reply plumbing ---------------------------------------------------
+    def _startReader(self):
+        """Start the thread that copies Multi-Axis stdout lines into a queue.
+        Called by initialize_program; tests call it after injecting a fake process."""
+        self._replyQueue=queue.Queue()
+        proc=self.multiSubProcess
+        q=self._replyQueue
+        def loop():
+            try:
+                for line in iter(proc.stdout.readline, b''):
+                    q.put(line)
+            except Exception:
+                pass
+        self._readerThread=threading.Thread(target=loop, name='MultiAxisReader', daemon=True)
+        self._readerThread.start()
+
+    def _readline(self, timeout: float | None = None) -> bytes:
+        """One reply line from Multi-Axis. Raises responseTimeoutError after
+        `timeout` (default self.replyTimeout) seconds, or notRunningError if the
+        program has exited."""
+        if self._replyQueue is None:
+            # reader not started (process attached without initialize_program)
+            return self.multiSubProcess.stdout.readline()
+        if timeout is None:
+            timeout=self.replyTimeout
+        try:
+            return self._replyQueue.get(timeout=timeout)
+        except queue.Empty:
+            if not self.isAlive():
+                raise self.notRunningError
+            raise self.responseTimeoutError
+
+    def _write(self, data: bytes):
+        self.multiSubProcess.stdin.write(data)
+        self.multiSubProcess.stdin.flush()
+
+    def isAlive(self) -> bool:
+        """True while the Multi-Axis program is running."""
+        proc=self.multiSubProcess
+        return proc is not None and proc.poll() is None
     
     def __sendCommand(self, commandString:str):
         """Takes in ascii encoded string."""
@@ -80,7 +137,7 @@ class vectorMagnet:
         #Automatically includes ?\n at the end of the command
         self.multiSubProcess.stdin.write(commandString+b'?\n')
         self.multiSubProcess.stdin.flush()
-        readBits=self.multiSubProcess.stdout.readline()
+        readBits=self._readline()
         decodedString=readBits.decode('ascii')
         decodedString=decodedString.rstrip()
 
@@ -100,7 +157,7 @@ class vectorMagnet:
         #Automatically includes ?\n at the end of the command
         self.multiSubProcess.stdin.write(commandString+b'?\n')
         self.multiSubProcess.stdin.flush()
-        readBits=self.multiSubProcess.stdout.readline()
+        readBits=self._readline()
         decodedString=readBits.decode('ascii')
         return decodedString
 
@@ -112,7 +169,7 @@ class vectorMagnet:
         """
         self.multiSubProcess.stdin.write(b'SYST:ERR?\n')
         self.multiSubProcess.stdin.flush()
-        readBits=self.multiSubProcess.stdout.readline()
+        readBits=self._readline()
         errorString=readBits.decode('ascii')
         errorString=errorString.rstrip()
         return errorString
@@ -121,7 +178,7 @@ class vectorMagnet:
         """Returns error count as int"""
         self.multiSubProcess.stdin.write(b'SYST:ERR:COUN?\n')
         self.multiSubProcess.stdin.flush()
-        readBits=self.multiSubProcess.stdout.readline()
+        readBits=self._readline()
         decodedString=readBits.decode('ascii')
         errorCount=int(decodedString.strip())
         return errorCount
@@ -404,3 +461,102 @@ class vectorMagnet:
         """
         timeString = self.__sendQuery(b'TARG:TIME')
         return float(timeString.strip())
+
+    # ----- snapshots for data files -----------------------------------------
+    @staticmethod
+    def _parseTriple(line: bytes) -> tuple[float, float, float]:
+        parts = line.decode('ascii').strip().split(',')
+        if len(parts) != 3:
+            raise ValueError(f'expected 3 comma-separated values, got {line!r}')
+        return float(parts[0]), float(parts[1]), float(parts[2])
+
+    def getStateSnapshot(self, mode: str = 'batched') -> dict:
+        """Read-only snapshot of the magnet for stamping into data files.
+
+        Returns a flat dict of float / int / bool / str values (never None or
+        tuples) so MATLAB's struct() converts it directly:
+          r, phi, theta                    measured field (present units; degrees; ISO, theta from +z)
+          rTarget, phiTarget, thetaTarget  setpoint
+          state                            see getState (-1 if unknown)
+          persistent                       persistent-switch mode
+          tRead                            time.time() at the read
+          snapshotMode                     'batched' | 'sequential'
+          errorString                      instrument error popped during the read, else ''
+
+        'batched' (default): STATE? first, then FIELD?, TARG?, PERS? written
+        back-to-back and their replies read, followed by one error-count check
+        with no sleep. The per-query 1 s sleep in __sendQuery exists so a
+        *command's* error has registered before the count is checked; these
+        queries are read-only, their replies are validated by parsing, and any
+        late error is caught by the next command's own check. STATE? goes first
+        so nothing is asked while disconnected (0) or quenched (6).
+        'sequential': the individual getters, about 1.1 s each.
+        """
+        nan = float('nan')
+        snap = {'r': nan, 'phi': nan, 'theta': nan,
+                'rTarget': nan, 'phiTarget': nan, 'thetaTarget': nan,
+                'state': -1, 'persistent': False, 'tRead': time.time(),
+                'snapshotMode': str(mode), 'errorString': ''}
+
+        if mode == 'sequential':
+            snap['state'] = int(self.getState())
+            if snap['state'] not in (0, 6):
+                r, p, t = self.getFieldSpherical()
+                snap['r'], snap['phi'], snap['theta'] = float(r), float(p), float(t)
+                r, p, t = self.getTargetFieldSpherical()
+                snap['rTarget'], snap['phiTarget'], snap['thetaTarget'] = float(r), float(p), float(t)
+                snap['persistent'] = bool(self.getPersistentMode())
+            return snap
+        if mode != 'batched':
+            raise ValueError(f"unknown snapshot mode '{mode}'")
+
+        self._write(b'STATE?\n')
+        snap['state'] = int(self._readline().decode('ascii').strip())
+        if snap['state'] in (0, 6):
+            return snap
+
+        self._write(b'FIELD?\nTARG?\nPERS?\n')
+        field = self._parseTriple(self._readline())
+        target = self._parseTriple(self._readline())
+        persistent = bool(int(self._readline().decode('ascii').strip()))
+        snap['r'], snap['phi'], snap['theta'] = field
+        snap['rTarget'], snap['phiTarget'], snap['thetaTarget'] = target
+        snap['persistent'] = persistent
+
+        if self.getErrorCount() > 0:
+            snap['errorString'] = self.getError()
+            for key in ('r', 'phi', 'theta', 'rTarget', 'phiTarget', 'thetaTarget'):
+                snap[key] = nan
+        return snap
+
+    def getSessionInfo(self) -> dict:
+        """Things that do not change while connected, for one read per session:
+        idn, units (0 kG / 1 T), unitsName, configPath (the .sav this driver
+        points at), align1_r/phi/theta, align2_r/phi/theta, errorString.
+        Uses the individual getters (about 1.1 s each). Failures leave NaN / ''
+        and are listed in errorString rather than raised."""
+        nan = float('nan')
+        info = {'idn': '', 'units': -1, 'unitsName': '',
+                'configPath': str(self.multiAxisConfig),
+                'align1_r': nan, 'align1_phi': nan, 'align1_theta': nan,
+                'align2_r': nan, 'align2_phi': nan, 'align2_theta': nan,
+                'errorString': ''}
+        errors = []
+        try:
+            info['idn'] = str(self.getIDN())
+        except Exception as e:
+            errors.append(f'idn: {e}')
+        try:
+            units = int(self.getUnits())
+            info['units'] = units
+            info['unitsName'] = {0: 'kG', 1: 'T'}.get(units, '')
+        except Exception as e:
+            errors.append(f'units: {e}')
+        for n in (1, 2):
+            try:
+                r, p, t = self.getSampleAlignmentVectorSpherical(n)
+                info[f'align{n}_r'], info[f'align{n}_phi'], info[f'align{n}_theta'] = float(r), float(p), float(t)
+            except Exception as e:
+                errors.append(f'align{n}: {e}')
+        info['errorString'] = '; '.join(errors)
+        return info
